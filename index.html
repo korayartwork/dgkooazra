@@ -3,7 +3,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#22151f">
-<title>eskibiplak</title>
+<title>dgkoazra</title>
+<meta property="og:title" content="dgkoazra">
+<meta property="og:site_name" content="dgkoazra">
+<meta name="twitter:title" content="dgkoazra">
 <style>
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% 35%,#53313c,#22151f 74%);color:#fff1dc;font-family:system-ui,sans-serif}main{min-height:100svh;max-width:520px;margin:auto;padding:24px clamp(18px,5vw,36px) max(24px,env(safe-area-inset-bottom));display:flex;flex-direction:column;text-align:center}#hint{color:#ead0c2;font-size:.9rem;min-height:2.8em;margin:12px auto 0;max-width:34ch}#stage{position:relative;width:100%;aspect-ratio:1;max-width:410px;margin:auto;display:grid;place-items:center}svg{width:100%;height:auto;overflow:visible}button{font:inherit;cursor:pointer;color:inherit}#action{align-self:center;min-height:48px;border:1px solid #f2c79d70;border-radius:40px;background:#f4d6b517;padding:10px 22px;margin:8px 0 18px}.drag{touch-action:none;cursor:grab;user-select:none;outline-offset:5px}.paper{position:absolute;width:66%;background:#f5dec1;color:#682d43;padding:14% 8%;border-radius:5px;box-shadow:0 15px 30px #0005;transform:rotate(-4deg);animation:arrive .4s both}.paper strong{font:normal clamp(2rem,8vw,3rem)/1 Georgia}.paper p{font-size:.86rem;line-height:1.55}.caption{font:12px system-ui;letter-spacing:2px}.spin{transform-box:fill-box;transform-origin:center;animation:spin 4s linear infinite}.lid-opening{pointer-events:none;animation:lid-off .48s ease-in forwards}.gift-contents{animation:gift-rise .5s .14s both}@keyframes lid-off{to{transform:translate(40px,-118px) rotate(12deg);opacity:0}}@keyframes gift-rise{from{transform:translateY(55px);opacity:0}to{transform:translateY(0);opacity:1}}@keyframes spin{to{transform:rotate(360deg)}}@keyframes arrive{from{opacity:0;translate:0 10px}to{opacity:1;translate:0}}@media(prefers-reduced-motion:reduce){.spin,.paper,.gift-contents{animation:none}.lid-opening{display:none}}
 
@@ -35,11 +38,13 @@ main{padding-top:clamp(26px,8vh,68px);max-width:570px}
 
 .card-scene{position:relative;width:100%;aspect-ratio:4/5;perspective:1300px}
 .card-unseal{overflow:hidden}
-.card-unseal .birthday-card{animation:card-slide .85s cubic-bezier(.22,.72,.25,1) both}
-#stage .card-envelope{position:absolute;inset:auto 0 0;width:100%;height:auto;pointer-events:none;animation:card-envelope-out .85s ease both}
+.card-unseal .birthday-card{position:relative;animation:card-slide 1.15s cubic-bezier(.22,.72,.25,1) both}
+#stage .card-envelope{position:absolute;inset:auto 0 0;width:100%;height:auto;pointer-events:none;filter:none;animation:card-envelope-out 1.15s ease both}
+.card-envelope-flap{transform-origin:180px 48px;transform-box:view-box;animation:card-flap-open 1.15s ease-in-out both}
 .card-cover-turn{position:absolute;inset:0;transform-origin:left center;backface-visibility:hidden;pointer-events:none;animation:card-turn .62s ease-in-out forwards}
-@keyframes card-slide{from{transform:translateY(71%) scale(.86)}to{transform:translateY(0) scale(1)}}
-@keyframes card-envelope-out{0%,42%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(28%)}}
+@keyframes card-slide{0%,27%{transform:translateY(77%) scale(.82)}70%{transform:translateY(8%) scale(.94)}100%{transform:translateY(0) scale(1)}}
+@keyframes card-envelope-out{0%,67%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(28%)}}
+@keyframes card-flap-open{0%,8%{transform:scaleY(1)}34%,100%{transform:scaleY(-1)}}
 @keyframes card-turn{from{transform:rotateY(0deg)}to{transform:rotateY(-180deg);visibility:hidden}}
 @media(prefers-reduced-motion:reduce){.card-unseal .birthday-card{animation:none}#stage .card-envelope,.card-cover-turn{display:none}}
 </style>
@@ -56,6 +61,49 @@ const action = document.querySelector('#action');
 const audio = document.querySelector('#audio');
 const restart = document.querySelector('#restart');
 let recordingFinished = false;
+let soundContext;
+let recordingBuffer;
+let soundSource;
+let soundOffset = 0;
+let soundStartedAt = 0;
+let startPending = false;
+let playbackRequest = 0;
+
+function prepareSound(){
+ const AudioContext = globalThis.AudioContext || globalThis.webkitAudioContext;
+ if(!AudioContext) return;
+ try {
+   if(!soundContext){
+     soundContext = new AudioContext();
+     recordingBuffer = fetch(audio.getAttribute('src'))
+       .then(response=>response.arrayBuffer())
+       .then(bytes=>soundContext.decodeAudioData(bytes))
+       .catch(()=>null);
+   }
+   if(soundContext.state!=='running') soundContext.resume().catch(()=>{});
+ } catch {
+   // Keep the HTML audio player available when Web Audio cannot start.
+ }
+}
+
+function isPlaying(){
+ return startPending || Boolean(soundSource) || !audio.paused;
+}
+
+function stopSound(){
+ playbackRequest++;
+ startPending=false;
+ if(soundSource){
+   soundOffset += soundContext.currentTime-soundStartedAt;
+   const source=soundSource;
+   soundSource=null;
+   source.onended=null;
+   source.stop();
+   source.disconnect();
+ }
+ audio.pause();
+ freezeRotation();
+}
 const steps = [
  ['Fiyongun ucunu tut ve yana doğru çek.','Fiyongu çöz'],
  ['Önce mektubu aç.','Mektubu aç'],
@@ -166,19 +214,26 @@ function birthdayCardMarkup(){
  const [src,alt]=birthdayCards[cardPage];
  const image=`<img class="birthday-card" src="${src}" alt="${alt}">`;
  if(cardPage===0){
-   return `<div class="card-scene card-unseal">${image}<svg class="card-envelope" viewBox="0 0 360 142" aria-hidden="true">
-     <path d="M4 25L180 0 356 25v112H4Z" fill="#ddbc98" stroke="#ae8767"/>
-     <path d="M4 27l176 68L356 27v106q0 5-6 5H10q-6 0-6-5Z" fill="#f2d8b7" stroke="#bc9472"/>
-     <path d="M8 133l123-57m98 0 123 57" fill="none" stroke="#bc9472"/>
-   </svg></div>`;
+   return `<div class="card-scene card-unseal">
+     <svg class="card-envelope" viewBox="0 0 360 168" aria-hidden="true">
+       <rect x="5" y="48" width="350" height="115" rx="6" fill="#dcb58c" stroke="#af825e"/>
+       <path d="M10 50h340v87H10Z" fill="#997057"/>
+       <path class="card-envelope-flap" d="M5 48h350l-159 68q-16 8-32 0z" fill="#ecd0ab" stroke="#b68a63"/>
+     </svg>
+     ${image}
+     <svg class="card-envelope" viewBox="0 0 360 168" aria-hidden="true">
+       <path d="M5 48l175 75 175-75v109q0 6-6 6H11q-6 0-6-6z" fill="#f3dabb" stroke="#b68a63"/>
+       <path d="M9 159l126-56m90 0l126 56" fill="none" stroke="#c29873"/>
+     </svg>
+   </div>`;
  }
  return `<div class="card-scene">${image}<img class="birthday-card card-cover-turn" src="${birthdayCards[0][0]}" alt="" aria-hidden="true"></div>`;
 }
 function render(){
  restart.hidden=!recordingFinished;
  const [hint,label] = step===2&&cardPage===0?['','Kartı çevir']:steps[step];
- document.querySelector('#hint').textContent=step===7&&audio.paused?'Plağı dinlemek için oynat düğmesine dokun.':hint;
- action.textContent=step===7&&audio.paused?'Oynat':label;
+ document.querySelector('#hint').textContent=step===7&&!isPlaying()?'Plağı dinlemek için oynat düğmesine dokun.':hint;
+ action.textContent=step===7&&!isPlaying()?'Oynat':label;
  let art='';
  if(step===0) art=box()+ribbon;
  if(step===1) art=box(true)+`<g class="gift-contents"><g transform="translate(188 63) rotate(3)">${squareSleeve}</g><g id="letter" class="drag" transform="translate(23 103) rotate(-5) scale(.72)">${envelope(false)}<path d="M16 18h160M14 105h164" stroke="#ab8260" stroke-opacity=".36" stroke-dasharray="2 3"/><circle cx="96" cy="74" r="13" stroke="#d7a48e" stroke-width="1.4" fill="#873e55"/></g></g><g class="lid-opening">${giftLid}</g>`;
@@ -194,23 +249,67 @@ function render(){
 function advance(){
  if(step===2&&cardPage===0){cardPage=1;render();return;}
  if(step===7){
-   if(audio.paused) play(); else {audio.pause();freezeRotation();render();}
+   if(isPlaying()){stopSound();render();} else play();
    return;
  }
+ if(step===4 || step===5) prepareSound();
  step++;
  if(step===6) spinStarted=Date.now();
  if(step===7) play(); else render();
 }
 function play(){
  recordingFinished=false;
+ const request=++playbackRequest;
+ if(soundContext?.state!=='running' || !recordingBuffer){
+   playNative(request);
+   return;
+ }
+
+ startPending=true;
+ freezeRotation();
+ render();
+ recordingBuffer.then(buffer=>{
+   if(request!==playbackRequest)return;
+   startPending=false;
+   if(!buffer || soundContext.state!=='running'){
+     playNative(request);
+     return;
+   }
+
+   const source=soundContext.createBufferSource();
+   source.buffer=buffer;
+   source.connect(soundContext.destination);
+   source.start(0,soundOffset);
+   soundStartedAt=soundContext.currentTime;
+   soundSource=source;
+   source.onended=()=>{
+     if(soundSource!==source)return;
+     source.disconnect();
+     soundSource=null;
+     soundOffset=0;
+     finishRecording();
+   };
+   resumeRotation();
+   render();
+ }).catch(()=>{
+   if(request===playbackRequest) showSoundError();
+ });
+}
+
+function playNative(request){
  resumeRotation();
  audio.play().catch(()=>{
-   freezeRotation();
-   render();
-   if(step===7) document.querySelector('#hint').textContent='Ses başlatılamadı. Oynat düğmesiyle tekrar dene.';
+   if(request===playbackRequest) showSoundError();
  });
  render();
 }
+
+function showSoundError(){
+ freezeRotation();
+ render();
+ document.querySelector('#hint').textContent='Ses başlatılamadı. Oynat düğmesiyle tekrar dene.';
+}
+
 function enableDrag(target){
  const svg=stage.querySelector('svg');
  let origin, pointer, side, moved=false;
@@ -281,13 +380,15 @@ function enableDrag(target){
  target.onlostpointercapture=()=>{if(pointer!==undefined) reset();};
 }
 action.onclick=advance;
-audio.onended=()=>{
+function finishRecording(){
  recordingFinished=true;
  freezeRotation();
  render();
-};
+}
+audio.onended=finishRecording;
 restart.onclick=()=>{
- audio.pause();
+ stopSound();
+ soundOffset=0;
  audio.currentTime=0;
  recordingFinished=false;
  step=0;
